@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎃 Halloween Kiosk Main Display</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background: radial-gradient(circle at center, #1a0800 0%, #050508 75%);
+      color: #ff6600;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* ==================== 1. SETUP MODAL ==================== */
+    #setupModal {
+      position: fixed;
+      z-index: 200;
+      background: rgba(16, 16, 22, 0.96);
+      border: 2px solid #ff5500;
+      border-radius: 14px;
+      padding: 28px 32px;
+      width: 92%;
+      max-width: 640px;
+      box-shadow: 0 0 50px rgba(255, 85, 0, 0.35);
+      color: #eee;
+    }
+
+    #setupModal h2 {
+      color: #ff7700;
+      margin-bottom: 6px;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 18px;
+    }
+
+    .field {
+      margin-bottom: 16px;
+    }
+
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #bbb;
+      margin-bottom: 6px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: #09090d;
+      border: 1px solid #333;
+      color: #00ff88;
+      border-radius: 6px;
+      font-family: Consolas, monospace;
+      font-size: 14px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+      background: #331111;
+      color: #ff4444;
+      border: 1px solid #ff4444;
+    }
+
+    .badge.online {
+      background: #0d2e1a;
+      color: #00ff88;
+      border-color: #00ff88;
+    }
+
+    #trackList {
+      margin-top: 8px;
+      max-height: 85px;
+      overflow-y: auto;
+      background: #09090c;
+      border: 1px solid #222;
+      padding: 8px;
+      border-radius: 6px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      color: #00ff88;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: transform 0.1s, background 0.2s;
+    }
+
+    .btn:active {
+      transform: scale(0.99);
+    }
+
+    .btn-primary {
+      background: linear-gradient(90deg, #ff4400, #ff7700);
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(255, 85, 0, 0.4);
+    }
+
+    .btn-secondary {
+      background: #262630;
+      color: #ddd;
+      border: 1px solid #444;
+    }
+
+    /* ==================== 2. IDLE SCREEN ==================== */
+    #idleStage {
+      text-align: center;
+      padding: 40px;
+      z-index: 10;
+    }
+
+    .floating-pumpkin {
+      font-size: 11vw;
+      filter: drop-shadow(0 0 35px rgba(255, 85, 0, 0.6));
+      animation: floatIdle 4s ease-in-out infinite;
+    }
+
+    #idleHeadline {
+      font-size: 4.5vw;
+      font-weight: 900;
+      letter-spacing: 6px;
+      color: #ff5500;
+      text-shadow: 0 0 25px #ff2200, 0 0 50px #880000;
+      margin-top: 15px;
+    }
+
+    #idleSubtext {
+      font-size: 1.6vw;
+      color: #888;
+      letter-spacing: 4px;
+      margin-top: 12px;
+      text-transform: uppercase;
+    }
+
+    /* ==================== 3. WELCOME TRIGGER SCREEN ==================== */
+    #welcomeOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      background: radial-gradient(circle, #3b0000 0%, #050000 80%);
+      padding: 30px;
+    }
+
+    #welcomeOverlay.active {
+      display: flex;
+      animation: pulseBg 0.35s infinite alternate;
+    }
+
+    #welcomeVisualImg {
+      max-width: 80vw;
+      max-height: 45vh;
+      object-fit: contain;
+      border-radius: 12px;
+      margin-bottom: 20px;
+      display: none;
+      filter: drop-shadow(0 0 30px #ff3300);
+      animation: popIn 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+    }
+
+    #welcomeEmoji {
+      font-size: 15vw;
+      margin-bottom: 10px;
+      animation: shakeScare 0.18s infinite;
+      filter: drop-shadow(0 0 40px #ff5500);
+    }
+
+    #welcomeTitle {
+      font-size: 7vw;
+      font-weight: 900;
+      color: #ffffff;
+      letter-spacing: 5px;
+      text-transform: uppercase;
+      text-shadow:
+        0 0 20px #ff4400,
+        0 0 45px #ff0000,
+        0 0 90px #aa0000;
+      animation: popIn 0.3s ease-out, glowPulse 0.4s infinite alternate;
+    }
+
+    #welcomeSub {
+      font-size: 2.6vw;
+      font-weight: 700;
+      color: #ffbb33;
+      letter-spacing: 3px;
+      margin-top: 14px;
+      text-shadow: 0 0 15px #000;
+    }
+
+    /* ==================== 4. CORNER STATUS BAR ==================== */
+    #statusBar {
+      position: fixed;
+      bottom: 12px;
+      right: 16px;
+      z-index: 150;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.35);
+    }
+
+    #statusDot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #ff2222;
+      box-shadow: 0 0 8px #ff2222;
+    }
+
+    #statusDot.online {
+      background: #00ff66;
+      box-shadow: 0 0 8px #00ff66;
+    }
+
+    /* ==================== ANIMATIONS ==================== */
+    @keyframes floatIdle {
+      0%, 100% { transform: translateY(0px) scale(0.98); }
+      50% { transform: translateY(-18px) scale(1.03); }
+    }
+
+    @keyframes popIn {
+      0% { transform: scale(0.4); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    @keyframes shakeScare {
+      0% { transform: translate(0, 0) rotate(0deg); }
+      25% { transform: translate(-8px, 6px) rotate(-4deg); }
+      50% { transform: translate(8px, -6px) rotate(4deg); }
+      75% { transform: translate(-6px, -4px) rotate(-2deg); }
+      100% { transform: translate(0, 0) rotate(0deg); }
+    }
+
+    @keyframes pulseBg {
+      0% { background: radial-gradient(circle, #2a0000 0%, #050000 80%); }
+      100% { background: radial-gradient(circle, #550a00 0%, #0a0000 80%); }
+    }
+
+    @keyframes glowPulse {
+      0% { text-shadow: 0 0 20px #ff4400, 0 0 40px #ff0000; }
+      100% { text-shadow: 0 0 35px #ffaa00, 0 0 75px #ff2200; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== 1. SETUP PANEL ==================== -->
+  <div id="setupModal">
+    <h2>
+      <span>🎃 Halloween Kiosk Setup</span>
+      <span id="liveBadge" class="badge">ESP32 Offline</span>
+    </h2>
+    <div class="hint">Shortcuts once armed: Press <b>[S]</b> to open/close setup | Press <b>[T]</b> to test welcome trigger</div>
+
+    <div class="field">
+      <label>1. ESP32 WebServer URL (from .NET Logger or http://halloween.local):</label>
+      <div class="row">
+        <input type="text" id="espUrlInput" value="http://halloween.local" placeholder="http://192.168.1.x">
+        <button class="btn btn-secondary" style="width: 140px; margin-top: 0; padding: 10px;" onclick="testEspConnection()">Ping ESP</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>2. Load Audio Tracks (.mp3, .wav, .ogg — Select Multiple):</label>
+      <input type="file" id="audioFilesInput" multiple accept="audio/*">
+      <div id="trackList">No audio files loaded yet.</div>
+    </div>
+
+    <div class="field">
+      <label>3. Welcome Headline Text (Shown when someone opens the door):</label>
+      <input type="text" id="customWelcomeInput" value="WELCOME TO HALLOWEEN!">
+    </div>
+
+    <div class="field">
+      <label>4. Optional: Load Custom Welcome GIFs / Images (Leave empty for built-in emojis):</label>
+      <input type="file" id="imageFilesInput" multiple accept="image/*">
+    </div>
+
+    <button class="btn btn-primary" onclick="armKiosk()">🚀 ARM KIOSK & GO FULLSCREEN</button>
+    <button class="btn btn-secondary" onclick="triggerWelcomeEvent()">🔊 Test Welcome Screen & Audio Now</button>
+  </div>
+
+  <!-- ==================== 2. IDLE STANDBY SCREEN ==================== -->
+  <div id="idleStage">
+    <div class="floating-pumpkin">🎃</div>
+    <div id="idleHeadline">STEP INSIDE IF YOU DARE</div>
+    <div id="idleSubtext">Waiting for the door to open...</div>
+  </div>
+
+  <!-- ==================== 3. WELCOME TRIGGER OVERLAY ==================== -->
+  <div id="welcomeOverlay">
+    <img id="welcomeVisualImg" src="" alt="Welcome Graphic">
+    <div id="welcomeEmoji">👻</div>
+    <div id="welcomeTitle">WELCOME TO HALLOWEEN!</div>
+    <div id="welcomeSub">WE HAVE BEEN EXPECTING YOU...</div>
+  </div>
+
+  <!-- ==================== 4. CORNER STATUS INDICATOR ==================== -->
+  <div id="statusBar">
+    <span id="distReadout">Dist: -- cm | Triggers: 0</span>
+    <div id="statusDot" title="ESP32 Connection Status"></div>
+  </div>
+
+  <script>
+    let audioTracks = [];
+    let visualImages = [];
+    let lastPlayedAudioIdx = -1;
+    let isTriggerActive = false;
+    let baselineTriggers = null;
+    let pollTimer = null;
+    let fallbackHideTimer = null;
+    let keepAliveStarted = false;
+
+    const audioPlayer = new Audio();
+
+    const welcomeSubtitles = [
+      "WE HAVE BEEN EXPECTING YOU...",
+      "ENJOY THE SPOOKY NIGHT!",
+      "WATCH YOUR STEP IN THE DARK...",
+      "HAPPY HALLOWEEN!",
+      "THE SPIRITS WELCOME YOU!"
+    ];
+
+    const spookyEmojis = ["🎃", "👻", "💀", "🦇", "🕷️", "🧛"];
+
+    // 1. Handle Audio File Selection
+    document.getElementById('audioFilesInput').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      audioTracks = files.map(f => ({
+        name: f.name,
+        url: URL.createObjectURL(f)
+      }));
+
+      const listEl = document.getElementById('trackList');
+      if (audioTracks.length > 0) {
+        listEl.innerText = `✅ Loaded ${audioTracks.length} track(s):\n` +
+          audioTracks.map((t, i) => `[${i + 1}] ${t.name}`).join('\n');
+      } else {
+        listEl.innerText = "No audio files loaded yet.";
+      }
+    });
+
+    // 2. Handle Optional Image/GIF Selection
+    document.getElementById('imageFilesInput').addEventListener('change', (e) => {
+      visualImages = Array.from(e.target.files).map(f => URL.createObjectURL(f));
+    });
+
+    // 3. Return to Idle Screen after audio finishes (keep Welcome visible for at least 3.5 seconds)
+    audioPlayer.onended = () => {
+      clearTimeout(fallbackHideTimer);
+      setTimeout(() => {
+        document.getElementById('welcomeOverlay').classList.remove('active');
+        isTriggerActive = false;
+      }, 1200);
+    };
+
+    // 4. Keep Speaker Awake via AUX (18Hz inaudible wave)
+    function ensureAuxKeepAlive() {
+      if (keepAliveStarted) return;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = 18; // Sub-audible 18Hz
+        gain.gain.value = 0.001;  // 0.1% volume
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        keepAliveStarted = true;
+      } catch (e) {
+        console.warn("AudioContext keep-alive could not start:", e);
+      }
+    }
+
+    // 5. Trigger Welcome Visual + Random Audio Track
+    function triggerWelcomeEvent() {
+      if (isTriggerActive) return;
+      if (audioTracks.length === 0) {
+        alert("Please select at least 1 audio file first!");
+        return;
+      }
+
+      ensureAuxKeepAlive();
+      isTriggerActive = true;
+
+      // Pick a random non-repeating audio track
+      let nextIdx;
+      do {
+        nextIdx = Math.floor(Math.random() * audioTracks.length);
+      } while (nextIdx === lastPlayedAudioIdx && audioTracks.length > 1);
+      lastPlayedAudioIdx = nextIdx;
+
+      // Update Welcome Screen Text
+      const headline = document.getElementById('customWelcomeInput').value.trim() || "WELCOME!";
+      document.getElementById('welcomeTitle').innerText = headline;
+      document.getElementById('welcomeSub').innerText =
+        welcomeSubtitles[Math.floor(Math.random() * welcomeSubtitles.length)];
+
+      // Show Custom Image/GIF or Animated Emoji
+      const imgEl = document.getElementById('welcomeVisualImg');
+      const emojiEl = document.getElementById('welcomeEmoji');
+
+      if (visualImages.length > 0) {
+        imgEl.src = visualImages[Math.floor(Math.random() * visualImages.length)];
+        imgEl.style.display = 'block';
+        emojiEl.style.display = 'none';
+      } else {
+        imgEl.style.display = 'none';
+        emojiEl.style.display = 'block';
+        emojiEl.innerText = spookyEmojis[Math.floor(Math.random() * spookyEmojis.length)];
+      }
+
+      // Activate Welcome Overlay
+      const overlay = document.getElementById('welcomeOverlay');
+      overlay.classList.add('active');
+
+      // Safety fallback in case an audio clip is super long or fails to fire onended
+      clearTimeout(fallbackHideTimer);
+      fallbackHideTimer = setTimeout(() => {
+        overlay.classList.remove('active');
+        isTriggerActive = false;
+      }, 15000);
+
+      // Play Selected Track
+      audioPlayer.src = audioTracks[nextIdx].url;
+      audioPlayer.play().catch(err => {
+        console.error("Playback error:", err);
+        setTimeout(() => {
+          overlay.classList.remove('active');
+          isTriggerActive = false;
+        }, 4000);
+      });
+    }
+
+    // 6. Ping ESP32 from Setup Modal
+    async function testEspConnection() {
+      const baseUrl = document.getElementById('espUrlInput').value.trim().replace(/\/$/, "");
+      const badge = document.getElementById('liveBadge');
+      try {
+        const res = await fetch(`${baseUrl}/status`, { cache: "no-store" });
+        const data = await res.json();
+        badge.innerText = `ESP Online (${data.distance} cm)`;
+        badge.classList.add('online');
+      } catch (err) {
+        badge.innerText = "ESP Offline / Check IP";
+        badge.classList.remove('online');
+      }
+    }
+
+    // 7. Arm Kiosk & Start 250ms Polling Loop
+    function armKiosk() {
+      if (audioTracks.length === 0) {
+        alert("Please load your audio files in Step 2 first!");
+        return;
+      }
+
+      ensureAuxKeepAlive();
+      document.getElementById('setupModal').style.display = 'none';
+
+      // Enter Fullscreen Kiosk Mode
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+
+      if (pollTimer) clearInterval(pollTimer);
+
+      pollTimer = setInterval(async () => {
+        const baseUrl = document.getElementById('espUrlInput').value.trim().replace(/\/$/, "");
+        const dot = document.getElementById('statusDot');
+        const badge = document.getElementById('liveBadge');
+        const readout = document.getElementById('distReadout');
+
+        try {
+          const res = await fetch(`${baseUrl}/status`, { cache: "no-store" });
+          const data = await res.json();
+
+          dot.classList.add('online');
+          badge.innerText = `ESP Online (${data.distance} cm)`;
+          badge.classList.add('online');
+          readout.innerText = `Dist: ${data.distance} cm | Triggers: ${data.triggers}`;
+
+          // Lock in current trigger count on first connection
+          if (baselineTriggers === null) {
+            baselineTriggers = data.triggers;
+          } 
+          // Door opened! ESP incremented trigger counter
+          else if (data.triggers > baselineTriggers) {
+            baselineTriggers = data.triggers;
+            triggerWelcomeEvent();
+          }
+        } catch (err) {
+          dot.classList.remove('online');
+          badge.innerText = "ESP Offline";
+          badge.classList.remove('online');
+        }
+      }, 250);
+    }
+
+    // 8. Keyboard Shortcuts ('S' for Setup Panel, 'T' for Manual Trigger)
+    window.addEventListener('keydown', (e) => {
+      // Ignore shortcuts if typing inside a text input
+      if (document.activeElement.tagName === 'INPUT') return;
+
+      if (e.key.toLowerCase() === 's') {
+        const modal = document.getElementById('setupModal');
+        modal.style.display = (modal.style.display === 'none') ? 'block' : 'none';
+      } else if (e.key.toLowerCase() === 't') {
+        triggerWelcomeEvent();
+      }
+    });
+  </script>
+</body>
+      </html>
