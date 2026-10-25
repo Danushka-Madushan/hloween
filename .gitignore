@@ -1,0 +1,10 @@
+# .NET / Visual Studio
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+.vs/
+
+# Large media files excluded from version control
+ambient_loop.mp3
+**/ambient_loop.mp3
