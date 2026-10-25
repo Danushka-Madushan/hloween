@@ -1,19 +1,23 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <AssemblyName>HalloweenKiosk</AssemblyName>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
 
-  <!-- Automatically copies everything in your project's Assets/ folder to bin/Debug/.../Assets/ -->
+  <!-- Ensure all Assets (images, audio) are copied to output and publish directories -->
   <ItemGroup>
+    <Resource Remove="Assets\**\*.*" />
     <Content Include="Assets\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="NAudio" Version="3.3.0" />
   </ItemGroup>
