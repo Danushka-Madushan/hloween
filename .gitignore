@@ -4,7 +4,3 @@
 *.user
 *.suo
 .vs/
-
-# Large media files excluded from version control
-ambient_loop.mp3
-**/ambient_loop.mp3
