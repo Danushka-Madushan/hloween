@@ -107,6 +107,7 @@ namespace KioskOverlay
         private bool _isShuttingDown = false;
 
         // Configuration Properties (Controllable via Control Panel)
+        public TimeSpan TriggerDelay { get; set; } = TimeSpan.FromSeconds(2.5);
         public TimeSpan MinimumPopupDuration { get; set; } = TimeSpan.FromSeconds(14);
         public bool IsDemoTimerEnabled { get; set; } = false; // Controlled via Control Panel checkbox
 
@@ -144,12 +145,13 @@ namespace KioskOverlay
             Log("[KIOSK] Operator Control Panel launched.");
 
             // 4. Hook ESP32 live triggers
+            _espService.LogMessage += (s, msg) => Console.WriteLine(msg);
             _espService.DoorTriggered += async (s, triggerCount) =>
             {
-                Log($"[DOOR TRIGGER] ESP32 Door Event #{triggerCount} received! Launching popup...");
+                Log($"[DOOR TRIGGER] ESP32 Door Event #{triggerCount} received! Launching popup with configured delay...");
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    await TriggerPopupAsync();
+                    await TriggerPopupAsync(applyDelay: true);
                 });
             };
             _espService.Start();
@@ -161,10 +163,21 @@ namespace KioskOverlay
                 if (IsDemoTimerEnabled)
                 {
                     Log($"[DEMO TIMER] Fired at {DateTime.Now:HH:mm:ss}! Popping up...");
-                    await TriggerPopupAsync();
+                    await TriggerPopupAsync(applyDelay: true);
                 }
             };
             _triggerTimer.Start();
+        }
+
+        public void DismissActivePopup()
+        {
+            Log("[POPUP] Dismissing active popup / aborting pending delay countdown...");
+            try
+            {
+                _currentPopupCts?.Cancel();
+            }
+            catch (ObjectDisposedException) { }
+            HideToBackground();
         }
 
         protected override void OnPreviewKeyDown(KeyEventArgs e)
@@ -174,9 +187,7 @@ namespace KioskOverlay
             // Escape: Dismiss active popup immediately
             if (e.Key == Key.Escape)
             {
-                Log("[KEYBOARD] Escape key pressed. Dismissing fullscreen popup early...");
-                _currentPopupCts?.Cancel();
-                HideToBackground();
+                DismissActivePopup();
             }
             // Ctrl + Q: Clean emergency termination
             else if (e.Key == Key.Q && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
@@ -294,30 +305,21 @@ namespace KioskOverlay
         {
             try
             {
-                if (_ambientReader != null && _ambientOutput != null)
-                {
-                    _ambientReader.Position = 0;
-                    _ambientOutput.Play();
-                    Log("[AUDIO WATCHDOG] Ambient loop restarted successfully.");
-                }
-                else
-                {
-                    SetupAmbientAudio();
-                }
+                Log("[AUDIO WATCHDOG] Reconstructing ambient audio pipeline...");
+                SetupAmbientAudio();
             }
             catch (Exception ex)
             {
-                Log($"[AUDIO WATCHDOG ERROR] Recovery failed: {ex.Message}. Will re-attempt setup...");
-                SetupAmbientAudio();
+                Log($"[AUDIO WATCHDOG ERROR] Ambient audio recovery failed: {ex.Message}");
             }
         }
 
-        public async Task TriggerPopupAsync()
+        public async Task TriggerPopupAsync(bool applyDelay = true)
         {
             // Concurrency lock: Prevent overlapping popups under high-frequency triggers
             if (!await _popupLock.WaitAsync(0))
             {
-                Log("[TRIGGER] Popup already active. Skipping overlapping trigger.");
+                Log("[TRIGGER] Popup sequence already armed/active. Skipping overlapping trigger.");
                 return;
             }
 
@@ -326,6 +328,21 @@ namespace KioskOverlay
 
             try
             {
+                // Optional pre-activation delay (e.g. 2.5s) to allow visitor to walk through door
+                if (applyDelay && TriggerDelay > TimeSpan.Zero)
+                {
+                    Log($"[TRIGGER DELAY] Door opened. Waiting {TriggerDelay.TotalSeconds:F1}s for visitor to enter before launching alert...");
+                    try
+                    {
+                        await Task.Delay(TriggerDelay, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Log("[TRIGGER DELAY] Trigger delay canceled before popup display.");
+                        return;
+                    }
+                }
+
                 string? alertPath = GetNextRandomAlertFile();
                 bool hasAlert = alertPath != null;
                 TimeSpan duration = MinimumPopupDuration;
@@ -371,6 +388,11 @@ namespace KioskOverlay
                     catch (Exception ex)
                     {
                         Log($"[AUDIO ERROR] Could not play alert voice: {ex.Message}");
+                        if (_ambientVolume != null)
+                        {
+                            _ambientVolume.Volume = DefaultAmbientVolume;
+                            Log($"[AUDIO] Restored ambient volume to {DefaultAmbientVolume} after alert failure.");
+                        }
                     }
                 }
 
@@ -381,7 +403,7 @@ namespace KioskOverlay
                 }
                 catch (OperationCanceledException)
                 {
-                    // Escape key pressed early
+                    Log("[TRIGGER] Active popup dismissed early by user.");
                 }
 
                 // 5. Clean up alert audio and return to background
@@ -397,6 +419,10 @@ namespace KioskOverlay
             }
             finally
             {
+                if (_ambientVolume != null && _ambientVolume.Volume != DefaultAmbientVolume)
+                {
+                    _ambientVolume.Volume = DefaultAmbientVolume;
+                }
                 _currentPopupCts?.Dispose();
                 _currentPopupCts = null;
                 _popupLock.Release();

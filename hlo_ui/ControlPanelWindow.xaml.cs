@@ -19,8 +19,12 @@ namespace KioskOverlay
             _espService = espService;
 
             // Initialize control values from MainWindow state
+            DelaySlider.Value = _mainWindow.TriggerDelay.TotalSeconds;
+            TxtDelayValue.Text = $"{DelaySlider.Value:F1} seconds";
+
             DurationSlider.Value = _mainWindow.MinimumPopupDuration.TotalSeconds;
             TxtDurationValue.Text = $"{(int)DurationSlider.Value} seconds";
+
             ChkDemoTimer.IsChecked = _mainWindow.IsDemoTimerEnabled;
 
             // Subscribe to ESP32 service events
@@ -69,10 +73,28 @@ namespace KioskOverlay
         {
             Dispatcher.Invoke(() =>
             {
+                // Memory cap for multi-day 24/7 reliability: Keep event log bounded to at most 1,000 lines
+                if (TxtEventLog.LineCount > 1000)
+                {
+                    int cutIndex = TxtEventLog.GetCharacterIndexFromLineIndex(250);
+                    if (cutIndex > 0)
+                    {
+                        TxtEventLog.Text = TxtEventLog.Text.Substring(cutIndex);
+                    }
+                }
+
                 string line = $"[{DateTime.Now:HH:mm:ss}] {message}";
                 TxtEventLog.AppendText(line + Environment.NewLine);
                 LogScrollViewer.ScrollToEnd();
             });
+        }
+
+        private void DelaySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (TxtDelayValue == null || _mainWindow == null) return;
+            double seconds = Math.Round(e.NewValue * 2.0) / 2.0;
+            TxtDelayValue.Text = $"{seconds:F1} seconds";
+            _mainWindow.TriggerDelay = TimeSpan.FromSeconds(seconds);
         }
 
         private void DurationSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -93,8 +115,8 @@ namespace KioskOverlay
 
         private async void BtnManualTrigger_Click(object sender, RoutedEventArgs e)
         {
-            AppendLog("[CONTROL PANEL] Manual trigger button clicked. Launching alert popup...");
-            await _mainWindow.TriggerPopupAsync();
+            AppendLog("[CONTROL PANEL] Manual trigger button clicked. Launching alert popup immediately...");
+            await _mainWindow.TriggerPopupAsync(applyDelay: false);
         }
 
         private void BtnTerminate_Click(object sender, RoutedEventArgs e)
@@ -105,7 +127,12 @@ namespace KioskOverlay
 
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Q && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            if (e.Key == Key.Escape)
+            {
+                AppendLog("[KEYBOARD] Escape key pressed. Dismissing fullscreen popup early...");
+                _mainWindow.DismissActivePopup();
+            }
+            else if (e.Key == Key.Q && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
             {
                 AppendLog("[KEYBOARD] Ctrl+Q shortcut detected. Shutting down application...");
                 _mainWindow.ShutdownApplication();

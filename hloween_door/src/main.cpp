@@ -107,14 +107,28 @@ void broadcastTrigger() {
   if (isDev && WiFi.status() != WL_CONNECTED) return; // Prevent socket error if Wi-Fi dropped
 
   String activeIP = getActiveIP().toString();
+  String doorStateStr = !doorClosed ? "OPEN" : "CLOSED";
   String triggerMsg = "[ESP32_TRIGGER] #" + String(triggerCount) + 
                       " | Dist: " + String(currentDistance) + "cm" +
+                      " | Door: " + doorStateStr +
                       " | IP: http://" + activeIP +
                       " | Mode: " + String(isDev ? "DEV_STA" : "PROD_AP");
-  IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
-  udp.beginPacket(broadcastIP, 4210);
-  udp.print(triggerMsg);
-  udp.endPacket();
+
+  if (isDev) {
+    // Send to both global broadcast and directed subnet broadcast for maximum router compatibility
+    udp.beginPacket(IPAddress(255, 255, 255, 255), 4210);
+    udp.print(triggerMsg);
+    udp.endPacket();
+
+    IPAddress subnetBroadcast = ~WiFi.subnetMask() | WiFi.localIP();
+    udp.beginPacket(subnetBroadcast, 4210);
+    udp.print(triggerMsg);
+    udp.endPacket();
+  } else {
+    udp.beginPacket(IPAddress(192, 168, 4, 255), 4210);
+    udp.print(triggerMsg);
+    udp.endPacket();
+  }
 }
 
 void startDevStation() {
@@ -322,17 +336,29 @@ void loop() {
   if (now - lastBeacon >= 3000) {
     lastBeacon = now;
     String activeIP = getActiveIP().toString();
+    String doorStateStr = !doorClosed ? "OPEN" : "CLOSED";
     String beacon = "[ESP32_BEACON] IP: http://" + activeIP + " | Dist: " + String(currentDistance) +
-                    "cm | Triggers: " + String(triggerCount) +
+                    "cm | Door: " + doorStateStr +
+                    " | Triggers: " + String(triggerCount) +
                     " | Mode: " + String(isDev ? "DEV_STA" : "PROD_AP");
     Serial.println(beacon);
 
     // Broadcast on UDP 4210
     if (!isDev || WiFi.status() == WL_CONNECTED) {
-      IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
-      udp.beginPacket(broadcastIP, 4210);
-      udp.print(beacon);
-      udp.endPacket();
+      if (isDev) {
+        udp.beginPacket(IPAddress(255, 255, 255, 255), 4210);
+        udp.print(beacon);
+        udp.endPacket();
+
+        IPAddress subnetBroadcast = ~WiFi.subnetMask() | WiFi.localIP();
+        udp.beginPacket(subnetBroadcast, 4210);
+        udp.print(beacon);
+        udp.endPacket();
+      } else {
+        udp.beginPacket(IPAddress(192, 168, 4, 255), 4210);
+        udp.print(beacon);
+        udp.endPacket();
+      }
     }
   }
 

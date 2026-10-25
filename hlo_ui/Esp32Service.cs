@@ -109,21 +109,20 @@ namespace KioskOverlay
 
         private void ProcessIncomingMessage(string message, string senderIp)
         {
-            // 1. Immediate Trigger Packet: [ESP32_TRIGGER] #1 | Dist: 45cm | IP: http://192.168.1.50 | Mode: DEV_STA
+            // 1. Immediate Trigger Packet: [ESP32_TRIGGER] #1 | Dist: 45cm | Door: OPEN | IP: http://192.168.1.50 | Mode: DEV_STA
             if (message.StartsWith("[ESP32_TRIGGER]"))
             {
                 LogMessage?.Invoke(this, $"[UDP TRIGGER] {message}");
-                ParseAndUpdateStatus(message, senderIp);
-                CheckAndFireTrigger();
+                ParseAndUpdateStatus(message, senderIp, isTriggerEvent: true);
             }
-            // 2. Periodic Status Beacon: [ESP32_BEACON] IP: http://192.168.1.50 | Dist: 12cm | Triggers: 1 | Mode: DEV_STA
+            // 2. Periodic Status Beacon: [ESP32_BEACON] IP: http://192.168.1.50 | Dist: 12cm | Door: CLOSED | Triggers: 1 | Mode: DEV_STA
             else if (message.StartsWith("[ESP32_BEACON]"))
             {
-                ParseAndUpdateStatus(message, senderIp);
+                ParseAndUpdateStatus(message, senderIp, isTriggerEvent: false);
             }
         }
 
-        private void ParseAndUpdateStatus(string message, string senderIp)
+        private void ParseAndUpdateStatus(string message, string senderIp, bool isTriggerEvent)
         {
             // Extract IP
             var ipMatch = Regex.Match(message, @"IP:\s*http://([0-9a-zA-Z\.\-]+)");
@@ -141,13 +140,19 @@ namespace KioskOverlay
             var modeMatch = Regex.Match(message, @"Mode:\s*([A-Za-z0-9_]+)");
             string mode = modeMatch.Success ? modeMatch.Groups[1].Value : _status.Mode;
 
+            // Extract Door State if explicitly broadcast; fallback to distance threshold
+            var doorMatch = Regex.Match(message, @"Door:\s*(OPEN|CLOSED)", RegexOptions.IgnoreCase);
+            bool doorOpen = doorMatch.Success
+                ? doorMatch.Groups[1].Value.Equals("OPEN", StringComparison.OrdinalIgnoreCase)
+                : dist > 22;
+
             bool wasConnected = _status.IsConnected;
 
             _status.IsConnected = true;
             _status.IpAddress = ip;
             _status.DistanceCm = dist;
             _status.Mode = mode;
-            _status.DoorOpen = dist > 22; // Matches ESP32 threshold (>22cm is door open)
+            _status.DoorOpen = doorOpen;
             _status.LastSeen = DateTime.Now;
 
             if (!wasConnected)
@@ -155,8 +160,15 @@ namespace KioskOverlay
                 LogMessage?.Invoke(this, $"[ESP32 ONLINE] Connected to ESP32 at http://{_status.IpAddress} (Mode: {_status.Mode})");
             }
 
-            // Check if trigger count increased in beacon
-            if (_lastTriggerCount >= 0 && triggers > _lastTriggerCount)
+            // Reboot detection: If reported triggers is less than our last recorded count, ESP32 reset/rebooted!
+            if (_lastTriggerCount >= 0 && triggers < _lastTriggerCount)
+            {
+                LogMessage?.Invoke(this, $"[ESP32] Counter reset / node restart detected (Old: {_lastTriggerCount}, New: {triggers}). Re-synchronizing...");
+                _lastTriggerCount = triggers;
+            }
+
+            // Fire trigger if this is an explicit trigger packet OR beacon indicates new triggers
+            if (isTriggerEvent || (_lastTriggerCount >= 0 && triggers > _lastTriggerCount))
             {
                 _status.TriggerCount = triggers;
                 CheckAndFireTrigger();
@@ -227,6 +239,13 @@ namespace KioskOverlay
                             if (!wasConnected)
                             {
                                 LogMessage?.Invoke(this, $"[ESP32 ONLINE] HTTP connection established: http://{_status.IpAddress}");
+                            }
+
+                            // Reboot detection via HTTP
+                            if (_lastTriggerCount >= 0 && triggers < _lastTriggerCount)
+                            {
+                                LogMessage?.Invoke(this, $"[ESP32] Counter reset / node restart detected via HTTP (Old: {_lastTriggerCount}, New: {triggers}). Re-synchronizing...");
+                                _lastTriggerCount = triggers;
                             }
 
                             if (_lastTriggerCount >= 0 && triggers > _lastTriggerCount)
