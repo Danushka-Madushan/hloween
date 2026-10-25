@@ -1,0 +1,56 @@
+name: Build & Package Standalone Kiosk
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-package:
+    name: Build Standalone Kiosk (win-x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish Standalone Executable
+        run: |
+          dotnet publish hlo_ui/hlo_ui.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o build_output/HalloweenKiosk
+
+      - name: Ensure Assets Folder is Complete
+        run: |
+          Copy-Item -Path "hlo_ui/Assets" -Destination "build_output/HalloweenKiosk" -Recurse -Force
+
+      - name: Remove Debug Symbol Files (.pdb)
+        run: |
+          Remove-Item -Path "build_output/HalloweenKiosk/*.pdb" -Force -ErrorAction SilentlyContinue
+
+      - name: Compress Release Archive
+        run: |
+          Compress-Archive -Path "build_output/HalloweenKiosk/*" -DestinationPath "HalloweenKiosk-Windows-x64.zip" -Force
+
+      - name: Upload Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HalloweenKiosk-Windows-x64
+          path: HalloweenKiosk-Windows-x64.zip
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: HalloweenKiosk-Windows-x64.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
