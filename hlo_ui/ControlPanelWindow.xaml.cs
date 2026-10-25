@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace KioskOverlay
@@ -29,7 +30,7 @@ namespace KioskOverlay
             // Subscribe to MainWindow logs
             _mainWindow.LogBroadcast += (s, msg) => AppendLog(msg);
 
-            AppendLog("[CONTROL PANEL] Dashboard initialized and ready.");
+            AppendLog("[CONTROL PANEL] Dashboard initialized and ready. Press Ctrl+Q anytime to exit.");
         }
 
         private void EspService_StatusUpdated(object? sender, Esp32Status status)
@@ -96,6 +97,21 @@ namespace KioskOverlay
             await _mainWindow.TriggerPopupAsync();
         }
 
+        private void BtnTerminate_Click(object sender, RoutedEventArgs e)
+        {
+            AppendLog("[TERMINATE] Terminate button clicked. Shutting down entire application cleanly...");
+            _mainWindow.ShutdownApplication();
+        }
+
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Q && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                AppendLog("[KEYBOARD] Ctrl+Q shortcut detected. Shutting down application...");
+                _mainWindow.ShutdownApplication();
+            }
+        }
+
         private void OpenWebUiButton_Click(object sender, RoutedEventArgs e)
         {
             string url = $"http://{_currentIp}";
@@ -121,8 +137,7 @@ namespace KioskOverlay
 
         protected override void OnClosed(EventArgs e)
         {
-            _espService.Stop();
-            Application.Current.Shutdown();
+            _mainWindow.ShutdownApplication();
             base.OnClosed(e);
         }
     }

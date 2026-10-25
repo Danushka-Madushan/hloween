@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Threading;
 using NAudio.Wave;
@@ -46,8 +48,14 @@ namespace KioskOverlay
                 int bytesRead = _sourceStream.Read(buffer, offset + totalBytesRead, count - totalBytesRead);
                 if (bytesRead == 0)
                 {
-                    if (_sourceStream.Position == 0 || !EnableLooping)
+                    if (!EnableLooping)
                         break;
+
+                    if (_sourceStream.Position == 0)
+                    {
+                        // Genuine end of readable data; prevent infinite spin
+                        break;
+                    }
                     _sourceStream.Position = 0;
                 }
                 totalBytesRead += bytesRead;
@@ -71,8 +79,10 @@ namespace KioskOverlay
         private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
-        // --- Timers & Audio Players ---
+        // --- Timers & Concurrency Locks ---
         private readonly DispatcherTimer _triggerTimer = new DispatcherTimer();
+        private readonly SemaphoreSlim _popupLock = new SemaphoreSlim(1, 1);
+        private CancellationTokenSource? _currentPopupCts;
 
         // NAudio Ambient Loop components
         private AudioFileReader? _ambientReader;
@@ -92,15 +102,17 @@ namespace KioskOverlay
         private readonly Random _random = new Random();
         private int _lastAlertIndex = -1;
 
+        // Operational State
+        private volatile bool _isAppRunning = true;
+        private bool _isShuttingDown = false;
+
         // Configuration Properties (Controllable via Control Panel)
         public TimeSpan MinimumPopupDuration { get; set; } = TimeSpan.FromSeconds(14);
         public bool IsDemoTimerEnabled { get; set; } = false; // Controlled via Control Panel checkbox
 
-        private readonly TimeSpan _triggerInterval = TimeSpan.FromSeconds(15); // Interval when demo timer is enabled
+        private readonly TimeSpan _triggerInterval = TimeSpan.FromSeconds(15);
         private const float DefaultAmbientVolume = 0.6f;
         private const float DuckedAmbientVolume = 0.15f;
-
-        private bool _isPopupActive = false;
 
         public event EventHandler<string>? LogBroadcast;
 
@@ -117,16 +129,16 @@ namespace KioskOverlay
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
         {
-            Log("[KIOSK] Application started.");
+            Log("[KIOSK] Application starting...");
 
-            // 1. Initialize and start the ambient background sound loop
+            // 1. Initialize and start perpetual ambient background sound loop
             SetupAmbientAudio();
 
             // 2. Hide fullscreen kiosk overlay to background initially
             HideToBackground();
             Log("[KIOSK] Hidden to background. Ambient sound playing.");
 
-            // 3. Launch the dedicated Operator Control Panel Window
+            // 3. Launch dedicated Operator Control Panel Window
             _controlPanel = new ControlPanelWindow(this, _espService);
             _controlPanel.Show();
             Log("[KIOSK] Operator Control Panel launched.");
@@ -142,11 +154,11 @@ namespace KioskOverlay
             };
             _espService.Start();
 
-            // 5. Setup recurring demo timer (only triggers if IsDemoTimerEnabled is true)
+            // 5. Setup recurring demo timer
             _triggerTimer.Interval = _triggerInterval;
             _triggerTimer.Tick += async (s, args) =>
             {
-                if (IsDemoTimerEnabled && !_isPopupActive)
+                if (IsDemoTimerEnabled)
                 {
                     Log($"[DEMO TIMER] Fired at {DateTime.Now:HH:mm:ss}! Popping up...");
                     await TriggerPopupAsync();
@@ -155,13 +167,32 @@ namespace KioskOverlay
             _triggerTimer.Start();
         }
 
+        protected override void OnPreviewKeyDown(KeyEventArgs e)
+        {
+            base.OnPreviewKeyDown(e);
+
+            // Escape: Dismiss active popup immediately
+            if (e.Key == Key.Escape)
+            {
+                Log("[KEYBOARD] Escape key pressed. Dismissing fullscreen popup early...");
+                _currentPopupCts?.Cancel();
+                HideToBackground();
+            }
+            // Ctrl + Q: Clean emergency termination
+            else if (e.Key == Key.Q && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+            {
+                Log("[KEYBOARD] Ctrl+Q shortcut detected on kiosk screen. Shutting down...");
+                ShutdownApplication();
+            }
+        }
+
         private string? ResolveAssetPath(string fileName)
         {
             // 1. Check build output directory (bin/Debug/.../Assets/)
             string localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", fileName);
             if (File.Exists(localPath)) return localPath;
 
-            // 2. Fallback to project source directory (in case assets were added without rebuild)
+            // 2. Fallback to project source directory
             string projectPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "Assets", fileName));
             if (File.Exists(projectPath)) return projectPath;
 
@@ -173,9 +204,7 @@ namespace KioskOverlay
             var files = new List<string>();
             var extensions = new[] { "*.wav", "*.mp3", "*.m4a", "*.aac" };
 
-            // 1. Check build output directory (bin/Debug/.../Assets/alerts/)
             string localAlertsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "alerts");
-            // 2. Fallback to project source directory
             string projectAlertsDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "Assets", "alerts"));
 
             string targetDir = Directory.Exists(localAlertsDir) ? localAlertsDir :
@@ -216,6 +245,8 @@ namespace KioskOverlay
             {
                 try
                 {
+                    StopAmbientAudio();
+
                     Log($"[AUDIO] Loading ambient loop from: {bgPath}");
                     _ambientReader = new AudioFileReader(bgPath);
                     _ambientLoopStream = new LoopStream(_ambientReader) { EnableLooping = true };
@@ -226,8 +257,26 @@ namespace KioskOverlay
 
                     _ambientOutput = new WaveOut();
                     _ambientOutput.Init(_ambientVolume);
-                    _ambientOutput.Play();
 
+                    // Perpetual looping guarantee & audio watchdog:
+                    // If audio driver resets, HDMI monitor sleeps, or stream stops, automatically recover!
+                    _ambientOutput.PlaybackStopped += (s, e) =>
+                    {
+                        if (_isAppRunning && !_isShuttingDown)
+                        {
+                            Log($"[AUDIO WATCHDOG] Ambient playback stopped unexpectedly ({e.Exception?.Message ?? "EOF/device reset"}). Auto-recovering ambient loop in 300ms...");
+                            Task.Run(async () =>
+                            {
+                                await Task.Delay(300);
+                                if (_isAppRunning && !_isShuttingDown)
+                                {
+                                    Dispatcher.Invoke(() => RecoverAmbientAudio());
+                                }
+                            });
+                        }
+                    };
+
+                    _ambientOutput.Play();
                     Log($"[AUDIO] Ambient sound successfully started! Format: {_ambientReader.WaveFormat}, Volume: {_ambientVolume.Volume}");
                 }
                 catch (Exception ex)
@@ -241,10 +290,39 @@ namespace KioskOverlay
             }
         }
 
+        private void RecoverAmbientAudio()
+        {
+            try
+            {
+                if (_ambientReader != null && _ambientOutput != null)
+                {
+                    _ambientReader.Position = 0;
+                    _ambientOutput.Play();
+                    Log("[AUDIO WATCHDOG] Ambient loop restarted successfully.");
+                }
+                else
+                {
+                    SetupAmbientAudio();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[AUDIO WATCHDOG ERROR] Recovery failed: {ex.Message}. Will re-attempt setup...");
+                SetupAmbientAudio();
+            }
+        }
+
         public async Task TriggerPopupAsync()
         {
-            if (_isPopupActive) return;
-            _isPopupActive = true;
+            // Concurrency lock: Prevent overlapping popups under high-frequency triggers
+            if (!await _popupLock.WaitAsync(0))
+            {
+                Log("[TRIGGER] Popup already active. Skipping overlapping trigger.");
+                return;
+            }
+
+            _currentPopupCts = new CancellationTokenSource();
+            var ct = _currentPopupCts.Token;
 
             try
             {
@@ -297,7 +375,14 @@ namespace KioskOverlay
                 }
 
                 // 4. Keep popup on screen for the duration of the alert voice / minimum duration
-                await Task.Delay(duration);
+                try
+                {
+                    await Task.Delay(duration, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Escape key pressed early
+                }
 
                 // 5. Clean up alert audio and return to background
                 StopAlertAudio();
@@ -312,7 +397,9 @@ namespace KioskOverlay
             }
             finally
             {
-                _isPopupActive = false;
+                _currentPopupCts?.Dispose();
+                _currentPopupCts = null;
+                _popupLock.Release();
             }
         }
 
@@ -338,26 +425,76 @@ namespace KioskOverlay
             }
         }
 
+        private void StopAmbientAudio()
+        {
+            try
+            {
+                if (_ambientOutput != null)
+                {
+                    _ambientOutput.Stop();
+                    _ambientOutput.Dispose();
+                    _ambientOutput = null;
+                }
+                if (_ambientLoopStream != null)
+                {
+                    _ambientLoopStream.Dispose();
+                    _ambientLoopStream = null;
+                }
+                if (_ambientReader != null)
+                {
+                    _ambientReader.Dispose();
+                    _ambientReader = null;
+                }
+            }
+            catch { }
+        }
+
         private void HideToBackground()
         {
             this.Hide();
         }
 
-        protected override void OnClosed(EventArgs e)
+        public void ShutdownApplication()
         {
-            _triggerTimer.Stop();
-            _espService.Dispose();
+            if (_isShuttingDown) return;
+            _isShuttingDown = true;
+            _isAppRunning = false;
+
+            Log("[SHUTDOWN] Performing clean termination of all services and audio streams...");
+
+            try { _triggerTimer.Stop(); } catch { }
+            try { _espService.Dispose(); } catch { }
+            try { _currentPopupCts?.Cancel(); } catch { }
+
             StopAlertAudio();
+            StopAmbientAudio();
 
             try
             {
-                _ambientOutput?.Stop();
-                _ambientOutput?.Dispose();
-                _ambientLoopStream?.Dispose();
-                _ambientReader?.Dispose();
+                _controlPanel?.Close();
             }
             catch { }
 
+            try
+            {
+                this.Close();
+            }
+            catch { }
+
+            Log("[SHUTDOWN] Complete. Exiting.");
+            Application.Current.Shutdown();
+
+            // Background fallback exit to guarantee zero zombie threads
+            Task.Run(async () =>
+            {
+                await Task.Delay(600);
+                Environment.Exit(0);
+            });
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            ShutdownApplication();
             base.OnClosed(e);
         }
     }

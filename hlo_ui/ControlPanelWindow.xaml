@@ -2,12 +2,13 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="🎃 Halloween Kiosk Control Panel"
-        Width="680" Height="740"
-        MinWidth="580" MinHeight="600"
+        Width="700" Height="740"
+        MinWidth="600" MinHeight="600"
         WindowStartupLocation="CenterScreen"
         Background="#121118"
         Foreground="#EEEEEE"
-        FontFamily="Segoe UI">
+        FontFamily="Segoe UI"
+        PreviewKeyDown="Window_PreviewKeyDown">
 
     <Window.Resources>
         <!-- Reusable Card Style -->
@@ -20,13 +21,13 @@
             <Setter Property="Margin" Value="0,0,0,14"/>
         </Style>
 
-        <!-- Modern Button Style -->
+        <!-- Modern Action Button Style -->
         <Style x:Key="ActionButton" TargetType="Button">
             <Setter Property="Background" Value="#FF6B00"/>
             <Setter Property="Foreground" Value="#FFFFFF"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="Padding" Value="16,10"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="14,9"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
@@ -48,12 +49,27 @@
             </Style.Triggers>
         </Style>
 
+        <!-- Secondary Button Style -->
         <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
             <Setter Property="Background" Value="#2A2636"/>
             <Setter Property="Foreground" Value="#DCD8E8"/>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
                     <Setter Property="Background" Value="#3B364C"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Danger Button Style (Emergency / Terminate) -->
+        <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+            <Setter Property="Background" Value="#A8201A"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#C92A23"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#7A140F"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -76,7 +92,7 @@
             <StackPanel Grid.Column="0">
                 <TextBlock Text="🎃 HALLOWEEN KIOSK CONTROLLER"
                            FontSize="20" FontWeight="Bold" Foreground="#FF6B00"/>
-                <TextBlock Text="ESP32 Door Sensor Status &amp; Alert Configuration"
+                <TextBlock Text="ESP32 Door Sensor Status &amp; Alert Configuration (Ctrl+Q to exit)"
                            FontSize="12" Foreground="#888496" Margin="0,3,0,0"/>
             </StackPanel>
             <Border Grid.Column="1" Background="#261A0F" BorderBrush="#FF6B00" BorderThickness="1"
@@ -175,14 +191,18 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <CheckBox x:Name="ChkDemoTimer" Content="Enable Auto Demo Timer (popups every 15s)"
+                    <CheckBox Grid.Column="0" x:Name="ChkDemoTimer" Content="Enable Auto Demo Timer (every 15s)"
                               FontSize="12" Foreground="#DCD8E8" VerticalAlignment="Center"
                               Checked="ChkDemoTimer_CheckedChanged" Unchecked="ChkDemoTimer_CheckedChanged"/>
 
-                    <Button Grid.Column="1" x:Name="BtnManualTrigger" Content="⚡ Test Alert Popup Now"
-                            Style="{StaticResource ActionButton}" Click="BtnManualTrigger_Click"/>
+                    <Button Grid.Column="1" x:Name="BtnManualTrigger" Content="⚡ Test Alert Popup"
+                            Style="{StaticResource ActionButton}" Margin="0,0,10,0" Click="BtnManualTrigger_Click"/>
+
+                    <Button Grid.Column="2" x:Name="BtnTerminate" Content="🛑 Terminate Program"
+                            Style="{StaticResource DangerButton}" Click="BtnTerminate_Click"/>
                 </Grid>
             </StackPanel>
         </Border>

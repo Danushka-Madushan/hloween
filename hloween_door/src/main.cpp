@@ -104,6 +104,8 @@ IPAddress getActiveIP() {
 }
 
 void broadcastTrigger() {
+  if (isDev && WiFi.status() != WL_CONNECTED) return; // Prevent socket error if Wi-Fi dropped
+
   String activeIP = getActiveIP().toString();
   String triggerMsg = "[ESP32_TRIGGER] #" + String(triggerCount) + 
                       " | Dist: " + String(currentDistance) + "cm" +
@@ -326,10 +328,12 @@ void loop() {
     Serial.println(beacon);
 
     // Broadcast on UDP 4210
-    IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
-    udp.beginPacket(broadcastIP, 4210);
-    udp.print(beacon);
-    udp.endPacket();
+    if (!isDev || WiFi.status() == WL_CONNECTED) {
+      IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
+      udp.beginPacket(broadcastIP, 4210);
+      udp.print(beacon);
+      udp.endPacket();
+    }
   }
 
   // 3. Self-Healing RAM Check: If heap ever drops below 40KB over 2 weeks, clean restart while door is shut
