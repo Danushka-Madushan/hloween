@@ -7,13 +7,21 @@
 #include <esp_task_wdt.h>
 
 // =========================================================================
-// 1. PURE BUILT-IN AP CONFIGURATION (Zero Router Dependencies)
+// 1. NETWORK CONFIGURATION (Dev Station Mode vs Pure Built-In AP)
 // =========================================================================
-// Connect the Windows Kiosk Wi-Fi to this network:
+// Set isDev to true to connect to your home Wi-Fi during development.
+// Set isDev to false for the standalone Halloween deployment (AP mode).
+const bool isDev = true;
+
+// --- Dev Mode Settings (Station Mode - Connects to Home Wi-Fi) ---
+const char* DEV_SSID = "Dialog 4G 822";     // Change to your home Wi-Fi SSID
+const char* DEV_PASS = "3058BAd5"; // Change to your home Wi-Fi password
+
+// --- Production Mode Settings (Standalone Access Point) ---
 const char* AP_SSID = "Halloween_Door";
 const char* AP_PASS = "spooky2026"; // Must be at least 8 characters
 
-// Static IP is permanently http://192.168.4.1
+// Static IP for standalone AP mode: http://192.168.4.1
 IPAddress local_IP(192, 168, 4, 1);
 IPAddress gateway(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
@@ -24,9 +32,9 @@ WiFiUDP udp;
 // =========================================================================
 // 2. HARDWARE PINS (30-Pin ESP32 DevKit)
 // =========================================================================
-const int LED_PIN  = 2;  // Onboard Blue LED (Solid = AP Ready, Blinks on Trigger)
-const int TRIG_PIN = 26; // HC-SR04 TRIG -> D27
-const int ECHO_PIN = 27; // HC-SR04 ECHO -> D26 (Use 1k + 2k divider if possible!)
+const int LED_PIN  = 2;  // Onboard Blue LED (Solid = Ready, Blinks on Trigger / Connecting)
+const int TRIG_PIN = 26; // HC-SR04 TRIG -> D26
+const int ECHO_PIN = 27; // HC-SR04 ECHO -> D27
 
 // =========================================================================
 // 3. DOOR DETECTION TUNING
@@ -91,6 +99,56 @@ void addCorsHeaders() {
   server.sendHeader("Connection", "close"); // Prevents socket exhaustion over 14 days
 }
 
+IPAddress getActiveIP() {
+  return isDev ? WiFi.localIP() : local_IP;
+}
+
+void broadcastTrigger() {
+  String activeIP = getActiveIP().toString();
+  String triggerMsg = "[ESP32_TRIGGER] #" + String(triggerCount) + 
+                      " | Dist: " + String(currentDistance) + "cm" +
+                      " | IP: http://" + activeIP +
+                      " | Mode: " + String(isDev ? "DEV_STA" : "PROD_AP");
+  IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
+  udp.beginPacket(broadcastIP, 4210);
+  udp.print(triggerMsg);
+  udp.endPacket();
+}
+
+void startDevStation() {
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(DEV_SSID, DEV_PASS);
+
+  Serial.println("\n==========================================");
+  Serial.print("[DEV_WIFI] Connecting to " + String(DEV_SSID));
+
+  // Connect loop with 25-second timeout and blinking blue LED
+  unsigned long startAttempt = millis();
+  bool ledState = false;
+  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 25000) {
+    delay(250);
+    ledState = !ledState;
+    digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(LED_PIN, HIGH); // Solid Blue LED = Connected & Ready!
+    Serial.println("\n[DEV_ONLINE] Connected successfully!");
+    Serial.println("[ESP32_IP]    http://" + WiFi.localIP().toString());
+    if (MDNS.begin("halloween")) {
+      Serial.println("[MDNS_READY]  http://halloween.local");
+    }
+  } else {
+    digitalWrite(LED_PIN, LOW);
+    Serial.println("\n[DEV_WARNING] Could not connect to Wi-Fi. Check SSID/Password.");
+  }
+  Serial.println("==========================================\n");
+}
+
 void startPureAccessPoint() {
   digitalWrite(LED_PIN, LOW);
 
@@ -127,18 +185,28 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
 
-  startPureAccessPoint();
+  // 2. Start either Dev Station Mode or Production Access Point
+  if (isDev) {
+    startDevStation();
+  } else {
+    startPureAccessPoint();
+  }
 
-  // 2. Web Dashboard (Visit http://192.168.4.1 in browser to test/monitor)
+  // 3. Web Dashboard (Visit ESP32 IP in browser to test/monitor)
   server.on("/", HTTP_GET, []() {
     addCorsHeaders();
+    String activeIP = getActiveIP().toString();
+    String modeName = isDev ? "Home Wi-Fi (STA)" : "Standalone AP";
+    String clientInfo = isDev ? (WiFi.status() == WL_CONNECTED ? "Connected (RSSI: " + String(WiFi.RSSI()) + " dBm)" : "Disconnected")
+                              : (String(WiFi.softAPgetStationNum()) + " Kiosks");
+
     String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
     html += "<style>body{background:#111;color:#eee;font-family:sans-serif;text-align:center;padding:30px;}";
     html += ".box{background:#1c1c22;padding:25px;border-radius:12px;display:inline-block;border:2px solid #ff5500;}";
     html += "button{background:#ff5500;color:#fff;border:none;padding:12px 24px;font-size:16px;border-radius:6px;cursor:pointer;margin-top:15px;font-weight:bold;}</style></head><body>";
-    html += "<div class='box'><h1>ESP32 Pure-AP Door Node</h1>";
-    html += "<p><b>Permanent IP:</b> http://192.168.4.1 | <b>CPU:</b> " + String(getCpuFrequencyMhz()) + " MHz</p>";
-    html += "<p><b>Uptime:</b> <span id='u'>0</span> mins | <b>Connected Kiosks:</b> <span id='c'>0</span></p>";
+    html += "<div class='box'><h1>ESP32 Door Node (" + modeName + ")</h1>";
+    html += "<p><b>IP Address:</b> http://" + activeIP + " | <b>CPU:</b> " + String(getCpuFrequencyMhz()) + " MHz</p>";
+    html += "<p><b>Uptime:</b> <span id='u'>0</span> mins | <b>Network:</b> " + clientInfo + "</p>";
     html += "<p style='font-size:24px;color:#00ff88;'><b>Distance:</b> <span id='d'>" + String(currentDistance) + "</span> cm</p>";
     html += "<p><b>Door State:</b> <span id='s'>" + String(doorClosed ? "CLOSED" : "OPEN") + "</span></p>";
     html += "<p><b>Total Triggers:</b> <span id='t'>" + String(triggerCount) + "</span></p>";
@@ -147,34 +215,38 @@ void setup() {
     html += "document.getElementById('d').innerText=d.distance;";
     html += "document.getElementById('s').innerText=d.doorOpen?'OPEN':'CLOSED';";
     html += "document.getElementById('t').innerText=d.triggers;";
-    html += "document.getElementById('u').innerText=d.uptimeMin;";
-    html += "document.getElementById('c').innerText=d.clients;});},400);</script></body></html>";
+    html += "document.getElementById('u').innerText=d.uptimeMin;});},400);</script></body></html>";
     server.send(200, "text/html", html);
   });
 
-  // 3. Fast JSON Endpoint Polled by Kiosk (http://192.168.4.1/status)
+  // 4. Fast JSON Endpoint Polled by Kiosk (http://<ESP32_IP>/status)
   server.on("/status", HTTP_GET, []() {
     addCorsHeaders();
+    String activeIP = getActiveIP().toString();
+    int clientCount = isDev ? (WiFi.status() == WL_CONNECTED ? 1 : 0) : WiFi.softAPgetStationNum();
     String json = "{\"triggers\":" + String(triggerCount) +
                   ",\"distance\":" + String(currentDistance) +
                   ",\"doorOpen\":" + String(!doorClosed ? "true" : "false") +
                   ",\"uptimeMin\":" + String(millis() / 60000) +
-                  ",\"clients\":" + String(WiFi.softAPgetStationNum()) + "}";
+                  ",\"ip\":\"" + activeIP + "\"" +
+                  ",\"isDev\":" + String(isDev ? "true" : "false") +
+                  ",\"clients\":" + String(clientCount) + "}";
     server.send(200, "application/json", json);
   });
 
-  // 4. Manual Test Endpoint
+  // 5. Manual Test Endpoint
   server.on("/test", HTTP_GET, []() {
     addCorsHeaders();
     triggerCount++;
     lastTriggerTime = millis();
     Serial.printf("[TEST_TRIGGER] #%lu\n", triggerCount);
+    broadcastTrigger();
     server.send(200, "text/plain", "Triggered!");
   });
 
   server.begin();
 
-  // 5. Enable 15-Second Hardware Watchdog (Auto-reboots if MCU ever freezes over 14 days)
+  // 6. Enable 15-Second Hardware Watchdog (Auto-reboots if MCU ever freezes over 14 days)
   #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     esp_task_wdt_config_t twdt_config = {
         .timeout_ms = 15000,
@@ -194,6 +266,16 @@ void loop() {
   server.handleClient();
 
   unsigned long now = millis();
+
+  // 0. Non-blocking Wi-Fi reconnect in Dev mode if connection drops
+  if (isDev && WiFi.status() != WL_CONNECTED) {
+    static unsigned long lastReconnectAttempt = 0;
+    if (now - lastReconnectAttempt >= 10000) {
+      lastReconnectAttempt = now;
+      Serial.println("[DEV_WIFI] Connection lost. Attempting reconnection...");
+      WiFi.reconnect();
+    }
+  }
 
   // 1. Poll Ultrasonic Sensor every 75ms
   static unsigned long lastSensorRead = 0;
@@ -222,6 +304,7 @@ void loop() {
       digitalWrite(LED_PIN, HIGH);
 
       Serial.printf("[DOOR_OPEN] Trigger #%lu | Dist: %ld cm\n", triggerCount, currentDistance);
+      broadcastTrigger();
     }
 
     // Door Closed! Re-arm after 2.5 seconds
@@ -236,13 +319,15 @@ void loop() {
   static unsigned long lastBeacon = 0;
   if (now - lastBeacon >= 3000) {
     lastBeacon = now;
-    String beacon = "[ESP32_BEACON] IP: http://192.168.4.1 | Dist: " + String(currentDistance) +
+    String activeIP = getActiveIP().toString();
+    String beacon = "[ESP32_BEACON] IP: http://" + activeIP + " | Dist: " + String(currentDistance) +
                     "cm | Triggers: " + String(triggerCount) +
-                    " | Clients: " + String(WiFi.softAPgetStationNum());
+                    " | Mode: " + String(isDev ? "DEV_STA" : "PROD_AP");
     Serial.println(beacon);
 
-    // Broadcast on UDP 4210 for your .NET CLI logger
-    udp.beginPacket(IPAddress(192, 168, 4, 255), 4210);
+    // Broadcast on UDP 4210
+    IPAddress broadcastIP = isDev ? IPAddress(255, 255, 255, 255) : IPAddress(192, 168, 4, 255);
+    udp.beginPacket(broadcastIP, 4210);
     udp.print(beacon);
     udp.endPacket();
   }

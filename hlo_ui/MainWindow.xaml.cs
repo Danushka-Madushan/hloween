@@ -84,46 +84,71 @@ namespace KioskOverlay
         private AudioFileReader? _alertReader;
         private WaveOut? _alertOutput;
 
+        // ESP32 Background Service & Operator Control Panel
+        private readonly Esp32Service _espService = new Esp32Service();
+        private ControlPanelWindow? _controlPanel;
+
         // Random generator and non-repeating state for alert voice selection
         private readonly Random _random = new Random();
         private int _lastAlertIndex = -1;
 
-        // Configuration
-        private readonly TimeSpan _triggerInterval = TimeSpan.FromSeconds(15);      // Interval between recurring popups
-        private readonly TimeSpan _defaultPopupDuration = TimeSpan.FromSeconds(14);  // Minimum popup display duration
+        // Configuration Properties (Controllable via Control Panel)
+        public TimeSpan MinimumPopupDuration { get; set; } = TimeSpan.FromSeconds(14);
+        public bool IsDemoTimerEnabled { get; set; } = false; // Controlled via Control Panel checkbox
+
+        private readonly TimeSpan _triggerInterval = TimeSpan.FromSeconds(15); // Interval when demo timer is enabled
         private const float DefaultAmbientVolume = 0.6f;
         private const float DuckedAmbientVolume = 0.15f;
 
         private bool _isPopupActive = false;
+
+        public event EventHandler<string>? LogBroadcast;
 
         public MainWindow()
         {
             InitializeComponent();
         }
 
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        private void Log(string message)
         {
-            Console.WriteLine("[KIOSK] Application started.");
+            Console.WriteLine(message);
+            LogBroadcast?.Invoke(this, message);
+        }
+
+        private void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            Log("[KIOSK] Application started.");
 
             // 1. Initialize and start the ambient background sound loop
             SetupAmbientAudio();
 
-            // 2. Hide to background initially
+            // 2. Hide fullscreen kiosk overlay to background initially
             HideToBackground();
-            Console.WriteLine("[KIOSK] Hidden to background. Ambient sound playing.");
+            Log("[KIOSK] Hidden to background. Ambient sound playing.");
 
-            // 3. Initial test popup 3 seconds after launch
-            Console.WriteLine("[KIOSK] Running first test popup in 3 seconds...");
-            await Task.Delay(3000);
-            await TriggerPopupAsync();
+            // 3. Launch the dedicated Operator Control Panel Window
+            _controlPanel = new ControlPanelWindow(this, _espService);
+            _controlPanel.Show();
+            Log("[KIOSK] Operator Control Panel launched.");
 
-            // 4. Start the recurring timer for subsequent popups
+            // 4. Hook ESP32 live triggers
+            _espService.DoorTriggered += async (s, triggerCount) =>
+            {
+                Log($"[DOOR TRIGGER] ESP32 Door Event #{triggerCount} received! Launching popup...");
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    await TriggerPopupAsync();
+                });
+            };
+            _espService.Start();
+
+            // 5. Setup recurring demo timer (only triggers if IsDemoTimerEnabled is true)
             _triggerTimer.Interval = _triggerInterval;
             _triggerTimer.Tick += async (s, args) =>
             {
-                if (!_isPopupActive)
+                if (IsDemoTimerEnabled && !_isPopupActive)
                 {
-                    Console.WriteLine($"[KIOSK] Timer fired at {DateTime.Now:HH:mm:ss}! Popping up...");
+                    Log($"[DEMO TIMER] Fired at {DateTime.Now:HH:mm:ss}! Popping up...");
                     await TriggerPopupAsync();
                 }
             };
@@ -191,7 +216,7 @@ namespace KioskOverlay
             {
                 try
                 {
-                    Console.WriteLine($"[AUDIO] Loading ambient loop from: {bgPath}");
+                    Log($"[AUDIO] Loading ambient loop from: {bgPath}");
                     _ambientReader = new AudioFileReader(bgPath);
                     _ambientLoopStream = new LoopStream(_ambientReader) { EnableLooping = true };
                     _ambientVolume = new VolumeSampleProvider(_ambientLoopStream.ToSampleProvider())
@@ -203,16 +228,16 @@ namespace KioskOverlay
                     _ambientOutput.Init(_ambientVolume);
                     _ambientOutput.Play();
 
-                    Console.WriteLine($"[AUDIO] Ambient sound successfully started! Format: {_ambientReader.WaveFormat}, Volume: {_ambientVolume.Volume}");
+                    Log($"[AUDIO] Ambient sound successfully started! Format: {_ambientReader.WaveFormat}, Volume: {_ambientVolume.Volume}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[AUDIO ERROR] Failed to start ambient audio: {ex.Message}");
+                    Log($"[AUDIO ERROR] Failed to start ambient audio: {ex.Message}");
                 }
             }
             else
             {
-                Console.WriteLine($"[AUDIO WARNING] Missing Assets/ambient_loop.mp3! Searched in: {Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets")}");
+                Log($"[AUDIO WARNING] Missing Assets/ambient_loop.mp3! Searched in: {Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets")}");
             }
         }
 
@@ -225,17 +250,17 @@ namespace KioskOverlay
             {
                 string? alertPath = GetNextRandomAlertFile();
                 bool hasAlert = alertPath != null;
-                TimeSpan duration = _defaultPopupDuration;
+                TimeSpan duration = MinimumPopupDuration;
 
                 // 1. Duck background music volume if alert voice is present
                 if (hasAlert && _ambientVolume != null)
                 {
-                    Console.WriteLine($"[AUDIO] Ducking ambient music to {DuckedAmbientVolume} for alert voice...");
+                    Log($"[AUDIO] Ducking ambient music to {DuckedAmbientVolume} for alert voice...");
                     _ambientVolume.Volume = DuckedAmbientVolume;
                 }
                 else
                 {
-                    Console.WriteLine("[AUDIO INFO] No alert voice found in Assets/alerts - ambient sound continues playing normally.");
+                    Log("[AUDIO INFO] No alert voice found in Assets/alerts - ambient sound continues playing normally.");
                 }
 
                 // 2. Show window and force it above Fullscreen PowerPoint
@@ -258,20 +283,20 @@ namespace KioskOverlay
                         _alertOutput.Init(_alertReader);
                         _alertOutput.Play();
 
-                        // Dynamic popup duration: audio length + 800ms natural padding (minimum 6s)
+                        // Dynamic popup duration: audio length + 800ms natural padding (minimum MinimumPopupDuration)
                         TimeSpan audioLength = _alertReader.TotalTime;
                         duration = audioLength + TimeSpan.FromMilliseconds(800);
-                        if (duration < _defaultPopupDuration) duration = _defaultPopupDuration;
+                        if (duration < MinimumPopupDuration) duration = MinimumPopupDuration;
 
-                        Console.WriteLine($"[ALERT] Playing random alert: {Path.GetFileName(alertPath)} (Audio Length: {audioLength:mm\\:ss\\.ff}, Popup Duration: {duration:mm\\:ss\\.ff})");
+                        Log($"[ALERT] Playing random alert: {Path.GetFileName(alertPath)} (Audio: {audioLength:mm\\:ss\\.ff}, Total Display: {duration:mm\\:ss\\.ff})");
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[AUDIO ERROR] Could not play alert voice: {ex.Message}");
+                        Log($"[AUDIO ERROR] Could not play alert voice: {ex.Message}");
                     }
                 }
 
-                // 4. Keep popup on screen for the duration of the alert voice
+                // 4. Keep popup on screen for the duration of the alert voice / minimum duration
                 await Task.Delay(duration);
 
                 // 5. Clean up alert audio and return to background
@@ -282,7 +307,7 @@ namespace KioskOverlay
                 if (_ambientVolume != null)
                 {
                     _ambientVolume.Volume = DefaultAmbientVolume;
-                    Console.WriteLine($"[AUDIO] Restored ambient volume to {DefaultAmbientVolume}.");
+                    Log($"[AUDIO] Restored ambient volume to {DefaultAmbientVolume}.");
                 }
             }
             finally
@@ -309,7 +334,7 @@ namespace KioskOverlay
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[AUDIO WARNING] Error disposing alert player: {ex.Message}");
+                Log($"[AUDIO WARNING] Error disposing alert player: {ex.Message}");
             }
         }
 
@@ -321,6 +346,7 @@ namespace KioskOverlay
         protected override void OnClosed(EventArgs e)
         {
             _triggerTimer.Stop();
+            _espService.Dispose();
             StopAlertAudio();
 
             try
